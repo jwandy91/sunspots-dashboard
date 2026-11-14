@@ -1,179 +1,133 @@
-# --------------------------------------------
-# Streamlit 시각화 + 인터랙션 추가
-# sunspots.csv 파일이 에디터 폴더의 data/아래에 있어야 합니다.
-# 연도범위, 히스토그램 구간 수, 추세선 차수, 산점도 점 크기, 산점도 투명도를 조절할 수 있는 기능을 추가합니다.
-# --------------------------------------------
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 
+
 @st.cache_data
 def load_data(file_path):
     df = pd.read_csv(file_path)
-    if 'YEAR' in df.columns:
-        # 소수점 제거 후 정수로 변환
-        df['YEAR_INT'] = df['YEAR'].astype(int)
-        df['DATE'] = pd.to_datetime(df['YEAR_INT'].astype(str), format='%Y')
-        df.set_index('DATE', inplace=True)
-    return df
+    df["YEAR_INT"] = df["YEAR"].astype(int)
+    df["DATE"] = pd.to_datetime(df["YEAR_INT"].astype(str), format="%Y")
+    return df.set_index("DATE").sort_index()
 
-def plot_advanced_sunspot_visualizations(df, sunactivity_col='SUNACTIVITY',
-                                        hist_bins=30, trend_degree=1,
-                                        point_size=10, point_alpha=0.5):
+
+def plot_advanced_sunspot_visualizations(
+    df, sunactivity_col="SUNACTIVITY", hist_bins=30,
+    trend_degree=1, point_size=10, point_alpha=0.5
+):
     fig, axs = plt.subplots(2, 2, figsize=(15, 12))
     fig.suptitle("Sunspots Data Advanced Visualization", fontsize=18)
 
-    # (a) 전체 시계열 라인 차트
-    axs[0, 0].plot(df.index, df[sunactivity_col], color='blue')
-    axs[0, 0].set_title("Sunspot Activity Over Time")
-    axs[0, 0].set_xlabel("Year")
-    axs[0, 0].set_ylabel("Sunspot Count")
-    axs[0, 0].grid(True)
+    activity = df[sunactivity_col].dropna()
+    data = activity.to_numpy(dtype=float)
+    years = activity.index.year.to_numpy()
 
-    # (b) 분포: 히스토그램 + 커널 밀도
+    # (a) 선택한 연도 범위의 시계열
+    ax = axs[0, 0]
+    ax.plot(df.index, df[sunactivity_col], color="blue")
+    ax.set(title="Sunspot Activity Over Time", xlabel="Year", ylabel="Sunspot Count")
+    ax.grid(True)
 
-    data = df[sunactivity_col].dropna().to_numpy()
-
+    # (b) 히스토그램과 밀도 곡선
+    ax = axs[0, 1]
     if len(data) > 0:
-        axs[0, 1].hist(
+        ax.hist(
             data, bins=hist_bins, density=True,
-            alpha=0.6, color='gray', label='Histogram'
+            alpha=0.6, color="gray", label="Histogram"
         )
-
-        # 서로 다른 값이 2개 이상일 때만 밀도 곡선을 계산
         if data.min() < data.max():
             xs = np.linspace(data.min(), data.max(), 200)
             density = gaussian_kde(data)
-            axs[0, 1].plot(xs, density(xs), color='red', linewidth=2, label='Density')
+            ax.plot(xs, density(xs), color="red", linewidth=2, label="Density")
+        ax.legend()
 
-        axs[0, 1].legend()
+    ax.set(title="Distribution of Sunspot Activity", xlabel="Sunspot Count", ylabel="Density")
+    ax.grid(True)
 
-    axs[0, 1].set_title("Distribution of Sunspot Activity")
-    axs[0, 1].set_xlabel("Sunspot Count")
-    axs[0, 1].set_ylabel("Density")
-    axs[0, 1].grid(True)
+    # (c) 선택한 기간 중 1900~2000년에 해당하는 데이터의 상자 그림
+    ax = axs[1, 0]
+    activity_20th = activity.loc["1900":"2000"]
+    if not activity_20th.empty:
+        ax.boxplot(activity_20th, vert=False)
+    else:
+        ax.text(
+            0.5, 0.5, "No data for 1900-2000 in the selected range",
+            ha="center", va="center", transform=ax.transAxes
+        )
+    ax.set(title="Boxplot of Sunspot Activity (1900-2000)", xlabel="Sunspot Count")
 
-    # (c) 상자 그림: 1900년~2000년
-    try:
-        df_20th = df.loc["1900":"2000"]
-        if not df_20th.empty:
-            axs[1, 0].boxplot(df_20th[sunactivity_col].dropna(), vert=False)
+    # (d) 산점도와 선택한 차수의 추세선
+    ax = axs[1, 1]
+    if len(data) > 0:
+        ax.scatter(years, data, s=point_size, alpha=point_alpha, label="Data Points")
 
-    except:
-        # 해당 기간 데이터가 없을 경우 예외 처리
-        pass
-    axs[1, 0].set_title("Boxplot of Sunspot Activity (1900-2000)")
-    axs[1, 0].set_xlabel("Sunspot Count")
+        # 예를 들어 3차 추세선에는 서로 다른 연도가 4개 이상 필요
+        if len(np.unique(years)) > trend_degree:
+            trend = np.polynomial.Polynomial.fit(years, data, trend_degree)
+            x_trend = np.linspace(years.min(), years.max(), 100)
+            ax.plot(x_trend, trend(x_trend), color="red", linewidth=2, label="Trend Line")
+        ax.legend()
 
-    # (d) 산점도 + 회귀선
-    years = df['YEAR'].values
-    sun_activity = df[sunactivity_col].values
+    ax.set(title="Trend of Sunspot Activity", xlabel="Year", ylabel="Sunspot Count")
+    ax.grid(True)
 
-    # NaN 값 제거
-    mask = ~np.isnan(sun_activity)
-    years_clean = years[mask]
-    sun_activity_clean = sun_activity[mask]
-
-    if len(years_clean) > 1:  # 회귀선을 그리기 위해 최소 2개 이상의 데이터 필요
-        axs[1, 1].scatter(years_clean, sun_activity_clean, s=point_size, alpha=point_alpha, label='Data Points')
-        coef = np.polyfit(years_clean, sun_activity_clean, trend_degree)
-        trend = np.poly1d(coef)
-
-        # 추세선을 그리기 위한 x 값 생성
-        x_trend = np.linspace(years_clean.min(), years_clean.max(), 100)
-        axs[1, 1].plot(x_trend, trend(x_trend), color='red', linewidth=2, label='Trend Line')
-    axs[1, 1].set_title("Trend of Sunspot Activity")
-    axs[1, 1].set_xlabel("Year")
-    axs[1, 1].set_ylabel("Sunspot Count")
-    axs[1, 1].legend()
-    axs[1, 1].grid(True)
-
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig.tight_layout(rect=[0, 0.03, 1, 0.95])
     return fig
 
+
 # 메인 앱
-st.title('🌞 태양흑점 데이터 분석 대시보드 🌞')
-st.markdown("""
-    이 대시보드는 태양흑점 데이터를 다양한 시각화 방법으로 보여줍니다.
-    """)
+st.title("🌞 태양흑점 데이터 분석 대시보드 🌞")
+st.write("사이드바에서 연도 범위와 그래프 설정을 조절할 수 있습니다.")
 
-try:
-    # 데이터 로드
-    df = load_data('data/sunspots.csv')
+# app3.py가 있는 폴더를 기준으로 CSV를 찾음
+app_dir = Path(__file__).resolve().parent
+csv_path = app_dir / "data" / "sunspots.csv"
 
-    # 사이드바에 파라미터 조절 슬라이더 추가
-    st.sidebar.header('시각화 설정')
+if not csv_path.is_file():
+    csv_path = app_dir / "sunspots.csv"
 
-    # 연도 범위 선택
-    min_year = int(df['YEAR_INT'].min())
-    max_year = int(df['YEAR_INT'].max())
+if not csv_path.is_file():
+    st.error("sunspots.csv 파일을 찾을 수 없습니다.")
+    st.info("GitHub 저장소에서 app3.py 옆이나 data 폴더 안에 sunspots.csv를 올려주세요.")
+    st.stop()
 
-    year_range = st.sidebar.slider(
-        '연도 범위',
-        min_value=min_year,
-        max_value=max_year,
-        value=(min_year, max_year),
-        step=1
+df = load_data(csv_path)
+
+if df.empty:
+    st.warning("CSV 파일에 데이터가 없습니다.")
+    st.stop()
+
+# 사이드바 설정
+st.sidebar.header("시각화 설정")
+
+min_year = int(df["YEAR_INT"].min())
+max_year = int(df["YEAR_INT"].max())
+
+year_range = st.sidebar.slider(
+    "연도 범위", min_year, max_year, (min_year, max_year)
+)
+hist_bins = st.sidebar.slider("히스토그램 구간 수", 5, 100, 30)
+trend_degree = st.sidebar.slider("추세선 차수", 1, 5, 1)
+point_size = st.sidebar.slider("산점도 점 크기", 1, 100, 10)
+point_alpha = st.sidebar.slider("산점도 투명도", 0.0, 1.0, 0.5, step=0.05)
+
+# 선택한 기간의 데이터로 그래프 그리기
+filtered_df = df.loc[df["YEAR_INT"].between(year_range[0], year_range[1])]
+
+if filtered_df.empty:
+    st.warning("선택한 기간에 데이터가 없습니다.")
+else:
+    st.subheader("태양흑점 데이터 종합 시각화")
+    fig = plot_advanced_sunspot_visualizations(
+        filtered_df,
+        hist_bins=hist_bins,
+        trend_degree=trend_degree,
+        point_size=point_size,
+        point_alpha=point_alpha
     )
-
-
-    # 히스토그램 빈(bin) 수 조절
-    hist_bins = st.sidebar.slider(
-        '히스토그램 구간 수',
-        min_value=5,
-        max_value=100,
-        value=30
-    )
-
-    # 추세선 차수 조절
-    trend_degree = st.sidebar.slider(
-        '추세선 차수',
-        min_value=1,
-        max_value=5,
-        value=1
-    )
-
-    # 산점도 점 크기 조절
-    point_size = st.sidebar.slider(
-        '산점도 점 크기',
-        min_value=1,
-        max_value=100,
-        value=10,
-        step=1
-    )
-
-
-
-    # 산점도 투명도 조절
-    point_alpha = st.sidebar.slider(
-        '산점도 투명도',
-        min_value=0.0,
-        max_value=1.0,
-        value=0.5,
-        step=0.05
-    )
-
-
-
-    # 필터링된 데이터
-    filtered_df = df[(df['YEAR'] >= year_range[0]) & (df['YEAR'] <= year_range[1])]
-
-    # 시각화
-    if not filtered_df.empty:
-        st.subheader('태양흑점 데이터 종합 시각화')
-        fig = plot_advanced_sunspot_visualizations(
-            filtered_df,
-            hist_bins=hist_bins,
-            trend_degree=trend_degree,
-            point_size=point_size,
-            point_alpha=point_alpha
-        )
-        st.pyplot(fig)
-    else:
-        st.warning("선택한 기간에 데이터가 없습니다.")
-
-except Exception as e:
-    st.error(f"오류가 발생했습니다: {e}")
-    st.info("데이터 파일의 구조를 확인해주세요. 'data/sunspots.csv' 파일이 존재하고 'YEAR'와 'SUNACTIVITY' 컬럼이 있어야 합니다.")
+    st.pyplot(fig)
+    plt.close(fig)
