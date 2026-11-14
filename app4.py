@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from prophet import Prophet
 
 
-# 코랩 셀과 파이썬 파일 실행 환경 구분
+# 실행 환경 확인
 is_notebook = "__file__" not in globals()
 base_dir = Path.cwd() if is_notebook else Path(__file__).resolve().parent
 
@@ -16,30 +16,89 @@ if not is_notebook:
 
 
 # ----------------------------------
-# [1] 데이터 불러오기
+# [1] 데이터 불러오기 및 전처리
 # ----------------------------------
-csv_path = base_dir / "data" / "sunspots_for_prophet.csv"
+# 전처리된 CSV를 먼저 찾고, 없으면 원본 CSV를 찾습니다.
+candidate_paths = [
+    base_dir / "data" / "sunspots_for_prophet.csv",
+    base_dir / "sunspots_for_prophet.csv",
+    base_dir / "data" / "sunspots.csv",
+    base_dir / "sunspots.csv",
+]
 
-if not csv_path.is_file():
-    csv_path = base_dir / "sunspots_for_prophet.csv"
+csv_source = next(
+    (path for path in candidate_paths if path.is_file()),
+    None
+)
 
-if not csv_path.is_file():
+if csv_source is None:
+    if is_notebook:
+        from google.colab import files
+        import io
+
+        print("sunspots_for_prophet.csv 또는 sunspots.csv를 선택해주세요.")
+        uploaded = files.upload()
+
+        if not uploaded:
+            raise ValueError("CSV 파일을 선택해주세요.")
+
+        csv_source = io.BytesIO(next(iter(uploaded.values())))
+    else:
+        st.info("분석에 사용할 태양흑점 CSV 파일을 업로드해주세요.")
+        csv_source = st.file_uploader(
+            "sunspots_for_prophet.csv 또는 sunspots.csv",
+            type=["csv"]
+        )
+
+        if csv_source is None:
+            st.stop()
+
+raw_df = pd.read_csv(csv_source)
+raw_df.columns = raw_df.columns.str.strip()
+
+if {"ds", "y"}.issubset(raw_df.columns):
+    # 이미 전처리된 데이터
+    df = raw_df[["ds", "y"]].copy()
+    df["ds"] = pd.to_datetime(df["ds"], errors="coerce")
+
+elif {"YEAR", "SUNACTIVITY"}.issubset(raw_df.columns):
+    # 원본 데이터에서 Prophet용 데이터 생성
+    years = pd.to_numeric(raw_df["YEAR"], errors="coerce").astype("Int64")
+
+    df = pd.DataFrame({
+        "ds": pd.to_datetime(
+            years.astype("string"),
+            format="%Y",
+            errors="coerce"
+        ),
+        "y": raw_df["SUNACTIVITY"]
+    })
+
+else:
     message = (
-        "sunspots_for_prophet.csv 파일을 찾을 수 없습니다. "
-        "현재 작업 폴더 또는 data 폴더에 파일을 업로드해주세요."
+        "CSV에 ds와 y 열 또는 YEAR와 SUNACTIVITY 열이 필요합니다."
     )
     if is_notebook:
-        raise FileNotFoundError(message)
+        raise ValueError(message)
     st.error(message)
     st.stop()
 
-df = pd.read_csv(csv_path, parse_dates=["ds"])
+df["y"] = pd.to_numeric(df["y"], errors="coerce")
+df = df.dropna(subset=["ds", "y"])
+
+# 학습 기간을 1900~2008년으로 제한
 df = (
-    df[["ds", "y"]]
-    .dropna()
+    df.loc[df["ds"].between("1900-01-01", "2008-01-01")]
     .sort_values("ds")
     .reset_index(drop=True)
 )
+
+if df["ds"].nunique() < 2:
+    message = "1900~2008년 기간에 학습 가능한 날짜가 2개 이상 필요합니다."
+    if is_notebook:
+        raise ValueError(message)
+    st.error(message)
+    st.stop()
 
 if is_notebook:
     print("데이터 미리보기")
@@ -47,6 +106,13 @@ if is_notebook:
 else:
     st.subheader("📄 데이터 미리보기")
     st.dataframe(df.head())
+
+    st.download_button(
+        "전처리된 CSV 다운로드",
+        data=df.to_csv(index=False, date_format="%Y-%m-%d"),
+        file_name="sunspots_for_prophet.csv",
+        mime="text/csv"
+    )
 
 
 # 코랩에서는 그래프 출력, Streamlit에서는 앱에 표시
@@ -69,7 +135,7 @@ model = Prophet(
     seasonality_mode="additive"
 )
 
-# period의 단위는 일입니다.
+# period는 일 단위이므로 11년을 일수로 환산
 model.add_seasonality(
     name="sunspot_cycle",
     period=11 * 365.25,
@@ -127,13 +193,15 @@ ax.fill_between(
 )
 
 ax.plot(
-    df["ds"], df["y"],
+    df["ds"],
+    df["y"],
     color="black",
     label="Actual"
 )
 
 ax.plot(
-    forecast["ds"], forecast["yhat"],
+    forecast["ds"],
+    forecast["yhat"],
     color="steelblue",
     label="Predicted"
 )
@@ -172,10 +240,12 @@ merged["residual"] = merged["y"] - merged["yhat"]
 fig4, ax2 = plt.subplots(figsize=(14, 4))
 
 ax2.plot(
-    merged["ds"], merged["residual"],
+    merged["ds"],
+    merged["residual"],
     color="teal",
     label="Residual"
 )
+
 ax2.axhline(
     0,
     color="black",
