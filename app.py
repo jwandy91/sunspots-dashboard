@@ -8,6 +8,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
 
+df = load_data('sunspots.csv')
+
 @st.cache_data
 def load_data(file_path):
     df = pd.read_csv(file_path)
